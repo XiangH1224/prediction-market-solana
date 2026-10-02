@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Fieldnote Demo",
+  "version": "0.1.0",
+  "description": "A local-first research and practice-market demo.",
+  "permissions": ["storage", "sidePanel"],
+  "host_permissions": [
+    "https://news.google.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open Fieldnote"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  }
+}
