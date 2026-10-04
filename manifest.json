@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Fieldnote",
+  "version": "0.1.0",
+  "description": "Kalshi market research, category search, followed events, and local practice simulations.",
+  "permissions": ["storage", "sidePanel"],
+  "host_permissions": [
+    "https://news.google.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open Fieldnote"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  }
+}
