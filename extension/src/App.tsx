@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import AnalysisCard from './components/AnalysisCard'
+import AnalysisCard, { type OutputTab } from './components/AnalysisCard'
 import PaperPositions from './components/PaperPositions'
 import SearchPanel from './components/SearchPanel'
 import SignalCard from './components/SignalCard'
 import TradeTicket from './components/TradeTicket'
-import { shortAddress } from './lib/format'
+import { eventLabel, shortAddress } from './lib/format'
 import { useOrchestrator, type Connection } from './lib/socket'
 import { loadToken, saveToken } from './lib/storage'
 import { connectWallet, signAndSend } from './lib/wallet'
@@ -29,25 +29,19 @@ function TokenForm({ onSave }: { onSave: (token: string) => void }) {
   const [draft, setDraft] = useState('')
   return (
     <form
-      className="space-y-2 rounded-lg border border-slate-800 bg-slate-900 p-3"
+      className="row col-12"
       onSubmit={(e) => {
         e.preventDefault()
         onSave(draft.trim())
       }}
     >
-      <label className="block text-xs text-slate-400" htmlFor="token">
-        This backend has PANEL_TOKEN set. Paste its value to connect.
-      </label>
-      <input
-        id="token"
-        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        autoComplete="off"
-      />
-      <button className="rounded bg-slate-200 px-3 py-1 text-sm font-medium text-slate-900 disabled:opacity-40" disabled={!draft.trim()}>
-        Save token
-      </button>
+      <div className="col-12">
+        <label htmlFor="token">This backend has PANEL_TOKEN set. Paste its value to connect.</label>
+        <input id="token" className="col-12" type="text" value={draft} onChange={(e) => setDraft(e.target.value)} autoComplete="off" />
+        <button className="col-12 text-center" disabled={!draft.trim()}>
+          Save token
+        </button>
+      </div>
     </form>
   )
 }
@@ -56,7 +50,9 @@ export default function App() {
   const [token, setToken] = useState('')
   const [wallet, setWallet] = useState<string | null>(null)
   const [walletError, setWalletError] = useState<string | null>(null)
-  const [passed, setPassed] = useState<string[]>([])
+  const [inputTab, setInputTab] = useState<'search' | 'portfolio'>('search')
+  const [outputTab, setOutputTab] = useState<OutputTab>('verdict')
+  const [selected, setSelected] = useState<string | null>(null)
   const { feed, send } = useOrchestrator(token, wallet)
 
   useEffect(() => {
@@ -88,92 +84,187 @@ export default function App() {
     }
   }
 
+  const titles: Record<string, string> = {}
+  for (const hit of [...(feed.browse?.results ?? []), ...(feed.search?.results ?? [])]) {
+    titles[hit.ticker] = eventLabel(hit.title, hit.subtitle)
+  }
+
   const analyse = (ticker: string) => {
-    setPassed((p) => p.filter((t) => t !== ticker))
-    send({ type: 'analyze', ticker })
+    setSelected(ticker)
+    setOutputTab('verdict')
+    // A finished or running analysis is shown again as is; only a new event is sent for analysis.
+    if (!feed.analyses[ticker] || feed.analyses[ticker].state === 'error') send({ type: 'analyze', ticker })
+    // When the panels are stacked, the results pane is below the event list.
+    if (window.innerWidth < 768) document.getElementById('main_panel')?.scrollIntoView({ behavior: 'smooth' })
+  }
+  const dismiss = (ticker: string) => {
+    send({ type: 'cancel_analysis', ticker })
+    if (selected === ticker) setSelected(null)
   }
   const buy = (ticker: string) => {
     send({ type: 'paper_buy', ticker })
-    setPassed((p) => [...p, ticker])
+    setInputTab('portfolio')
   }
-  const analyses = Object.values(feed.analyses).filter((a) => !passed.includes(a.ticker))
 
+  const current = selected ? feed.analyses[selected] : undefined
+  const others = Object.values(feed.analyses).filter((a) => a.ticker !== selected && a.state !== 'cancelled')
   const signals = Object.values(feed.signals).sort((a, b) => b.decision.edge - a.decision.edge)
   const notice = banner(feed.connection, feed.status)
+  const tradingOn = feed.status ? !feed.status.signals_only : false
+  const title =
+    current?.state === 'done'
+      ? eventLabel(current.market.title, current.market.subtitle)
+      : selected
+        ? (titles[selected] ?? selected)
+        : 'Pick an event'
 
   return (
-    <div className="mx-auto flex max-w-md flex-col gap-3 p-3">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-sm font-semibold">Prediction terminal</h1>
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-            <span className={`h-1.5 w-1.5 rounded-full ${feed.connection === 'open' ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-            {CONNECTION_LABEL[feed.connection]}
-            {feed.status && feed.connection === 'open' && ` · ${feed.status.markets} markets`}
+    <>
+      <nav className="navbar navbar-expand-sm bg-dark navbar-dark">
+        <a className="navbar-brand" href="./" style={{ fontSize: '1.5em' }}>
+          <i className="fa fa-chart-line fa-lg" /> &nbsp; Prediction Markets
+        </a>
+        <div className="navbar-status">
+          <i className={`fa fa-circle ${feed.connection === 'open' ? 'ok' : ''}`} /> {CONNECTION_LABEL[feed.connection]}
+          {tradingOn && (
+            <button className="helpbutton btn-link" type="button" onClick={wallet ? () => setWallet(null) : connect}>
+              <i className="fa fa-wallet fa-lg" /> {wallet ? shortAddress(wallet) : 'Connect wallet'}
+            </button>
+          )}
+        </div>
+      </nav>
+
+      <div className="container-fluid" id="main_row">
+        <div className="row">
+          <div className="col-md-4 col-sm-12" id="side_panel">
+            <p style={{ lineHeight: '100%', display: 'block', paddingTop: 4 }}>
+              <a href="https://kalshi.com/" target="_blank" rel="noreferrer">
+                Kalshi
+              </a>{' '}
+              is a regulated <em>prediction market</em>. Pick an event and this page reads the recent news, forecasts the
+              outcome, and compares that with the live price. Purchases here use simulated money.
+            </p>
+            <hr />
+
+            {feed.connection === 'unauthorized' && <TokenForm onSave={updateToken} />}
+            {notice && <div className="alert alert-warning">{notice}</div>}
+            {walletError && <div className="alert alert-warning">{walletError}</div>}
+
+            {/* INPUT TABS */}
+            <div className="row tab col-12">
+              <button
+                className={`inputTabLinks col-6 ${inputTab === 'search' ? 'active' : ''}`}
+                title="SEARCH finds Kalshi events; without search terms it lists the most traded ones."
+                onClick={() => setInputTab('search')}
+              >
+                SEARCH
+              </button>
+              <button
+                className={`inputTabLinks col-6 ${inputTab === 'portfolio' ? 'active' : ''}`}
+                title="PORTFOLIO lists your simulated purchases."
+                onClick={() => setInputTab('portfolio')}
+              >
+                PORTFOLIO{feed.paper?.positions.length ? ` (${feed.paper.positions.length})` : ''}
+              </button>
+            </div>
+
+            {feed.connection === 'open' && inputTab === 'search' && (
+              <SearchPanel
+                results={feed.search}
+                browse={feed.browse}
+                selected={selected}
+                onSearch={(query) => send({ type: 'search', query })}
+                onAnalyze={analyse}
+              />
+            )}
+            {feed.connection === 'open' && inputTab === 'portfolio' && feed.paper && <PaperPositions paper={feed.paper} />}
+
+            <div className="row col-12">
+              <hr className="col-12" />
+            </div>
+
+            {/* OUTPUT TABS */}
+            <div className="row tab col-12">
+              <button
+                className={`outputTabLinks col-6 ${outputTab === 'verdict' ? 'active' : ''}`}
+                title="VERDICT shows whether to invest, and why."
+                onClick={() => setOutputTab('verdict')}
+              >
+                VERDICT
+              </button>
+              <button
+                className={`outputTabLinks col-6 ${outputTab === 'sources' ? 'active' : ''}`}
+                title="SOURCES lists the news articles the verdict was based on."
+                onClick={() => setOutputTab('sources')}
+              >
+                SOURCES{current?.state === 'done' ? ` (${current.sources.length})` : ''}
+              </button>
+            </div>
+          </div>
+
+          <div id="main_panel" className="col-md-8 col-sm-12">
+            <div id="main_panel_title_row" className="row col-12">
+              <h3 style={{ float: 'left', paddingTop: 10, paddingLeft: 10 }}>
+                <i className="fa fa-search fa-sm" style={{ float: 'left', padding: 10, paddingLeft: 2, paddingTop: 15 }} />
+                <div id="iframe_title">{title}</div>
+              </h3>
+            </div>
+
+            <div id="iframe_container" className="row col-12">
+              {current ? (
+                <AnalysisCard analysis={current} view={outputTab} onBuy={buy} onPass={dismiss} onCancel={dismiss} />
+              ) : (
+                <p className="text-muted">
+                  Choose an event from the list on the left, or search for one. Its verdict, the reasoning and the news
+                  sources behind it appear here.
+                </p>
+              )}
+
+              {others.length > 0 && (
+                <>
+                  <h5>Other analyses</h5>
+                  <table className="table table-sm table-hover">
+                    <tbody>
+                      {others.map((a) => (
+                        <tr key={a.ticker} style={{ cursor: 'pointer' }} onClick={() => setSelected(a.ticker)}>
+                          <td>{a.state === 'done' ? eventLabel(a.market.title, a.market.subtitle) : (titles[a.ticker] ?? a.ticker)}</td>
+                          <td className="text-muted text-right">
+                            {a.state === 'running' ? (a.stage ?? 'Starting') : a.state === 'done' ? a.verdict.headline : 'Failed'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+
+              {feed.trades.length > 0 && (
+                <>
+                  <h5>Staged trades</h5>
+                  {feed.trades.map((trade) => (
+                    <TradeTicket
+                      key={trade.id}
+                      trade={trade}
+                      wallet={wallet}
+                      onSign={sign}
+                      onReject={(t) => send({ type: 'rejected', id: t.id })}
+                    />
+                  ))}
+                </>
+              )}
+
+              {signals.length > 0 && (
+                <>
+                  <h5>Live edge from the automatic scan</h5>
+                  {signals.map((signal) => (
+                    <SignalCard key={signal.market.ticker} signal={signal} />
+                  ))}
+                </>
+              )}
+            </div>
           </div>
         </div>
-        <button
-          className="rounded border border-slate-700 px-2 py-1 text-xs hover:bg-slate-800"
-          onClick={wallet ? () => setWallet(null) : connect}
-          title={wallet ? 'Disconnect' : undefined}
-        >
-          {wallet ? shortAddress(wallet) : 'Connect wallet'}
-        </button>
-      </header>
-
-      {feed.connection === 'unauthorized' && <TokenForm onSave={updateToken} />}
-      {notice && <div className="rounded border border-amber-700/50 bg-amber-950/40 p-2 text-xs text-amber-200">{notice}</div>}
-      {walletError && <div className="rounded border border-rose-700/50 bg-rose-950/40 p-2 text-xs text-rose-200">{walletError}</div>}
-
-      {feed.connection === 'open' && (
-        <>
-          <SearchPanel results={feed.search} browse={feed.browse} onSearch={(query) => send({ type: 'search', query })} onAnalyze={analyse} />
-          {analyses.map((analysis) => (
-            <AnalysisCard
-              key={analysis.ticker}
-              analysis={analysis}
-              onBuy={buy}
-              onPass={(ticker) => setPassed((p) => [...p, ticker])}
-              onCancel={(ticker) => send({ type: 'cancel_analysis', ticker })}
-            />
-          ))}
-          {feed.paper && <PaperPositions paper={feed.paper} />}
-        </>
-      )}
-
-      <section className="flex flex-col gap-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Staged trades</h2>
-        {feed.trades.map((trade) => (
-          <TradeTicket
-            key={trade.id}
-            trade={trade}
-            wallet={wallet}
-            onSign={sign}
-            onReject={(t) => send({ type: 'rejected', id: t.id })}
-          />
-        ))}
-        {!feed.trades.length && (
-          <p className="text-xs text-slate-500">
-            {feed.status?.signals_only
-              ? 'On-chain trading is off: the backend has no DFLOW_API_KEY. Use the simulated buy above.'
-              : wallet
-                ? 'Nothing staged. Trades appear here once they clear the hurdle and pass a dry run.'
-                : 'Connect a wallet so trades can be sized and dry-run for it.'}
-          </p>
-        )}
-      </section>
-
-      <section className="flex flex-col gap-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Live edge</h2>
-        {signals.map((signal) => (
-          <SignalCard key={signal.market.ticker} signal={signal} />
-        ))}
-        {!signals.length && (
-          <p className="text-xs text-slate-500">
-            {feed.status?.markets ? 'No markets evaluated yet.' : 'Automatic scanning is off (MAX_MARKETS=0). Pick an event above to analyse it.'}
-          </p>
-        )}
-      </section>
-    </div>
+      </div>
+    </>
   )
 }

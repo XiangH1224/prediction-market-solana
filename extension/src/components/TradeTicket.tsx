@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { pct, signedPct, usd } from '../lib/format'
+import { eventLabel, pct, signedPct, usd } from '../lib/format'
 import type { StagedTrade } from '../types'
 import SideBadge from './SideBadge'
 
@@ -8,15 +8,6 @@ type Props = {
   wallet: string | null
   onSign: (trade: StagedTrade) => Promise<void>
   onReject: (trade: StagedTrade) => void
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between text-xs">
-      <span className="text-slate-400">{label}</span>
-      <span className="tabular-nums">{value}</span>
-    </div>
-  )
 }
 
 function useSecondsLeft(expiresAt: number) {
@@ -52,61 +43,33 @@ export default function TradeTicket({ trade, wallet, onSign, onReject }: Props) 
   }
 
   return (
-    <div className="rounded-lg border border-emerald-700/60 bg-slate-900 p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="text-sm font-medium leading-snug">
-          {market.title}
-          {market.subtitle && <span className="text-slate-400"> · {market.subtitle}</span>}
+    <div className="card mb-2 border-success">
+      <div className="card-body p-2">
+        <SideBadge side={decision.side} /> <strong>{eventLabel(market.title, market.subtitle)}</strong>
+        <table className="table table-sm mt-2 mb-2">
+          <tbody>
+            <tr><td>Edge Δ at quoted fill</td><td className="text-right text-success">{signedPct(trade.effective_edge)}</td></tr>
+            <tr><td>Model probability</td><td className="text-right">{pct(decision.p_win)}</td></tr>
+            <tr><td>Fill price</td><td className="text-right">{pct(trade.effective_price)}</td></tr>
+            <tr><td>Spend</td><td className="text-right">{usd(trade.spend_usd)}</td></tr>
+            <tr><td>Contracts (min)</td><td className="text-right">{trade.expected_contracts.toFixed(2)} ({trade.min_contracts.toFixed(2)})</td></tr>
+            <tr><td>Payout if correct</td><td className="text-right">{usd(trade.est_payout_usd)}</td></tr>
+            <tr><td>Dry run: compute units</td><td className="text-right">{simulation.units_consumed?.toLocaleString() ?? '?'} / {simulation.compute_unit_limit?.toLocaleString() ?? '?'}</td></tr>
+            <tr><td>Dry run: USDC change</td><td className="text-right">{simulation.usdc_delta === null ? '?' : usd(simulation.usdc_delta)}</td></tr>
+            <tr><td>Dry run: contracts received</td><td className="text-right">{simulation.fill_checked ? (simulation.outcome_delta ?? 0).toFixed(2) : 'fills after signing'}</td></tr>
+          </tbody>
+        </table>
+        <small className="text-muted">{prediction.rationale}</small>
+        {!walletMatches && <div className="alert alert-warning mt-2">Built for a different wallet. Reconnect to restage.</div>}
+        {error && <div className="alert alert-danger mt-2">{error}</div>}
+        <div className="mt-2">
+          <button className="btn btn-success" onClick={sign} disabled={!canSign}>
+            {busy ? 'Waiting for wallet…' : secondsLeft > 0 ? `Sign & Execute (${secondsLeft}s)` : 'Expired'}
+          </button>{' '}
+          <button className="btn btn-light" onClick={() => onReject(trade)} disabled={busy}>
+            Reject
+          </button>
         </div>
-        <SideBadge side={decision.side} />
-      </div>
-
-      <div className="mt-2 flex items-baseline justify-between">
-        <span className="text-[11px] uppercase tracking-wide text-slate-500">Edge Δ at quoted fill</span>
-        <span className="text-lg font-semibold tabular-nums text-emerald-300">{signedPct(trade.effective_edge)}</span>
-      </div>
-
-      <div className="mt-2 space-y-1">
-        <Row label="Model probability" value={pct(decision.p_win)} />
-        <Row label="Fill price" value={pct(trade.effective_price)} />
-        <Row label="Spend" value={usd(trade.spend_usd)} />
-        <Row label="Contracts (min)" value={`${trade.expected_contracts.toFixed(2)} (${trade.min_contracts.toFixed(2)})`} />
-        <Row label="Payout if correct" value={usd(trade.est_payout_usd)} />
-      </div>
-
-      <div className="mt-2 space-y-1 rounded border border-slate-800 bg-slate-950/60 p-2">
-        <div className="text-[10px] uppercase tracking-wide text-slate-500">Dry run on mainnet</div>
-        <Row
-          label="Compute units"
-          value={`${simulation.units_consumed?.toLocaleString() ?? '?'} / ${simulation.compute_unit_limit?.toLocaleString() ?? '?'}`}
-        />
-        <Row label="USDC change" value={simulation.usdc_delta === null ? '?' : usd(simulation.usdc_delta)} />
-        <Row
-          label="Contracts received"
-          value={simulation.fill_checked ? (simulation.outcome_delta ?? 0).toFixed(2) : 'fills after signing'}
-        />
-      </div>
-
-      <p className="mt-2 text-xs text-slate-400">{prediction.rationale}</p>
-
-      {!walletMatches && <p className="mt-2 text-xs text-amber-300">Built for a different wallet. Reconnect to restage.</p>}
-      {error && <p className="mt-2 text-xs text-rose-300">{error}</p>}
-
-      <div className="mt-3 flex gap-2">
-        <button
-          className="flex-1 rounded bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white enabled:hover:bg-emerald-500 disabled:opacity-40"
-          onClick={sign}
-          disabled={!canSign}
-        >
-          {busy ? 'Waiting for wallet…' : secondsLeft > 0 ? `Sign & Execute (${secondsLeft}s)` : 'Expired'}
-        </button>
-        <button
-          className="rounded border border-slate-700 px-3 py-1.5 text-sm text-slate-300 enabled:hover:bg-slate-800 disabled:opacity-40"
-          onClick={() => onReject(trade)}
-          disabled={busy}
-        >
-          Reject
-        </button>
       </div>
     </div>
   )

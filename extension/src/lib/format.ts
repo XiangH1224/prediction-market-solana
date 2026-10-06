@@ -4,4 +4,8 @@ export const signedPct = (p: number) => `${p >= 0 ? '+' : '−'}${Math.abs(p * 1
 
 export const usd = (n: number) => `$${n.toFixed(2)}`
 
+/** Event title with its outcome label, unless the title already says it. */
+export const eventLabel = (title: string, subtitle: string) =>
+  subtitle && !title.toLowerCase().includes(subtitle.toLowerCase()) ? `${title} · ${subtitle}` : title
+
 export const shortAddress = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`
