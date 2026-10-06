@@ -14,3 +14,12 @@ backend/paper_positions.json
 # extension (Vite side panel)
 extension/node_modules/
 extension/dist/
+
+# relay secrets and local source config
+.env
+.env.*
+!.env.example
+data-source-mappings.local.json
+social-monitoring.local.json
+.social-state.json
+.social-state.json.tmp

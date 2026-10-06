@@ -9,6 +9,7 @@ export function analysisSchema(ids) {
     method:string, assumptions:string, probability_citations:citations,
     resolution_condition:string, settlement_exceptions:string,
     explanation:string, conclusion_citations:citations,
+    conclusion:object({market_signal:string, counter_signal:string, critical_unknowns:string, uncertainty_decision:string}),
     changed_evidence:string, change_explanation:string,
     supports_yes:{type:'array',maxItems:3,items:point}, supports_no:{type:'array',maxItems:3,items:point},
     critical_unknowns:{type:'array',maxItems:3,items:string},
@@ -25,6 +26,7 @@ function sentences(value, max) {
 export function normalizeAnalysis(parsed, articles, assessedAt) {
   const assessments = ['Favors Yes','Favors No','Mixed','Insufficient evidence'];
   if (!parsed || !assessments.includes(parsed.assessment) || !text(parsed.explanation) || !Array.isArray(parsed.sources)) throw new Error('The model returned incomplete analysis. Please retry.');
+  if (parsed.conclusion && ["market_signal", "counter_signal", "critical_unknowns", "uncertainty_decision"].some(key => !text(parsed.conclusion[key]))) throw new Error("The model returned an incomplete conclusion. Please retry.");
   const ids = new Set(articles.map(article=>article.id));
   const valid = values => Array.isArray(values) ? [...new Set(values.filter(id=>id === 'RULES' || ids.has(id)))] : [];
   const probability = parsed.probability_percent;
@@ -33,6 +35,7 @@ export function normalizeAnalysis(parsed, articles, assessedAt) {
   // A stated method is necessary, not proof of statistical calibration.
   const supported = probability !== null && parsed.assessment !== 'Insufficient evidence' && text(parsed.method) && text(parsed.assumptions) && probabilityCitations.some(id=>ids.has(id));
   const probabilityPercent = supported ? Math.round(probability / 5) * 5 : null;
+  const assessment = probabilityPercent === null ? "Insufficient evidence" : probabilityPercent > 50 ? "Favors Yes" : probabilityPercent < 50 ? "Favors No" : "Mixed";
   const seen = new Set();
   const sources = parsed.sources.flatMap(source => {
     if (!source || !ids.has(source.id) || seen.has(source.id) || !text(source.point)) return [];
@@ -45,18 +48,24 @@ export function normalizeAnalysis(parsed, articles, assessedAt) {
     return [{text:sentences(item.text,1),kind:['Verified fact','Reported claim','Inference'].includes(item.kind) ? item.kind : 'Reported claim', citations}];
   }).slice(0,3);
   return {
-    assessedAt, assessment:parsed.assessment,
-    verdict:parsed.assessment === 'Favors Yes' ? 'Yes' : parsed.assessment === 'Favors No' ? 'No' : 'Wait',
+    assessedAt, assessment,
+    verdict:assessment === 'Favors Yes' ? 'Yes' : assessment === 'Favors No' ? 'No' : 'Wait',
     probabilityPercent, probabilityNo:probabilityPercent === null ? null : 100-probabilityPercent,
     method:text(parsed.method), assumptions:text(parsed.assumptions), probabilityCitations,
     resolutionCondition:text(parsed.resolution_condition), settlementExceptions:text(parsed.settlement_exceptions),
     // One numerical lead plus at most four explanatory sentences.
-    explanation:sentences(parsed.explanation,4), conclusionCitations:valid(parsed.conclusion_citations),
+    explanation:sentences(parsed.explanation,4),
+    ...(parsed.conclusion ? {conclusion: {
+      marketSignal:sentences(parsed.conclusion.market_signal,1),
+      counterSignal:sentences(parsed.conclusion.counter_signal,1),
+      criticalUnknowns:sentences(parsed.conclusion.critical_unknowns,1),
+      uncertaintyDecision:sentences(parsed.conclusion.uncertainty_decision,1)
+    }} : {}), conclusionCitations:valid(parsed.conclusion_citations),
     changedEvidence:sentences(parsed.changed_evidence,1), changeExplanation:sentences(parsed.change_explanation,1),
     supportsYes:points(parsed.supports_yes), supportsNo:points(parsed.supports_no),
     criticalUnknowns:(Array.isArray(parsed.critical_unknowns) ? parsed.critical_unknowns : []).filter(item=>text(item)).slice(0,3).map(item=>sentences(item,1)),
     sources, citations:sources.map(source=>source.id),
-    insufficientEvidence:parsed.assessment === 'Insufficient evidence', uncalibrated:probabilityPercent !== null
+    insufficientEvidence:assessment === 'Insufficient evidence', uncalibrated:probabilityPercent !== null
   };
 }
 
@@ -69,8 +78,8 @@ export function prepareEvidence(articles, assessedAt) {
     if (!title || titles.has(title) || (url && urls.has(url))) return [];
     titles.add(title); if (url) urls.add(url);
     const date = Date.parse(article.date);
-    return [{...article, access:article.content || article.description ? 'Headlines and excerpts only; content may be truncated' : 'Headline and metadata only',
+    return [{...article, access:article.access || (article.content || article.description ? 'Headlines and excerpts only; content may be truncated' : 'Headline and metadata only'),
       publicationAgeHours:Number.isFinite(date) ? Math.round((Date.parse(assessedAt)-date)/3600000) : null,
       publicationDateWarning:!Number.isFinite(date) ? 'Publication date unavailable' : date > Date.parse(assessedAt) ? 'Publication date is after assessment time; verify before using' : ''}];
-  }).slice(0,10);
+  }).slice(0,16);
 }

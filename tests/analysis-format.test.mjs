@@ -66,3 +66,18 @@ test('evidence removes obvious duplicates and marks date/access limitations',()=
   assert.match(result[1].publicationDateWarning,/after assessment/);
   assert.match(result[1].access,/truncated/);
 });
+
+
+test('structured conclusion retains the four ordered signals and rejects missing fields', () => {
+  const conclusion = {market_signal:'Inflation fell to 2.5%. Extra sentence.', counter_signal:'Wages rose 4%.', critical_unknowns:'The next release is pending.', uncertainty_decision:'The pending release lowers confidence to 65% but does not change Yes.'};
+  const result = normalizeAnalysis({...fixture(), conclusion}, articles, 'now');
+  assert.deepEqual(Object.values(result.conclusion), ['Inflation fell to 2.5%.', 'Wages rose 4%.', 'The next release is pending.', conclusion.uncertainty_decision]);
+  assert.throws(() => normalizeAnalysis({...fixture(), conclusion:{...conclusion, counter_signal:''}}, articles, 'now'), /incomplete conclusion/);
+});
+
+test('final decision agrees with the displayed rounded probability', () => {
+  for (const [probability, verdict] of [[35,'No'], [50,'Wait'], [65,'Yes'], [52,'Wait']]) {
+    const result = normalizeAnalysis({...fixture(), probability_percent:probability}, articles, 'now');
+    assert.equal(result.verdict, verdict);
+  }
+});

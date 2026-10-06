@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test",
+    "test": "node --test tests/*.test.mjs",
     "build:panel": "esbuild flow.js --bundle --format=esm --platform=browser --outfile=panel.bundle.js",
-    "news:proxy": "node --watch news-proxy.mjs"
+    "news:proxy": "node --watch news-proxy.mjs",
+    "verify:sources": "node verify-sources.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"
