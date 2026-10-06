@@ -13,7 +13,9 @@ cp .env.example .env   # XAI_API_KEY is required; see the comments for the optio
 .venv/bin/uvicorn app.main:app --port 8000
 ```
 
-Then open http://localhost:8000/panel in a browser. Search or pick an event, read the
+The PredictFlow panel at the repo root is the UI; `npm start` there runs this backend together with the
+Kalshi market relay the panel needs. Then open http://localhost:8000/predictflow/ in a browser, or load the
+repo root as an unpacked extension. Search or pick an event, read the
 verdict and its sources, and buy with simulated money or pass. Set `PANEL_TOKEN` only if
 you want the panel to require a shared secret.
 

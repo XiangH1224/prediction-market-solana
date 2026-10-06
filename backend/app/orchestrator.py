@@ -233,6 +233,7 @@ class Orchestrator:
                 "quote": quote.model_dump(),
                 "verdict": verdict(prediction, decision),
                 "sources": self.engine.sources(ticker) if hasattr(self.engine, "sources") else [],
+                "detail": self.engine.details(ticker) if hasattr(self.engine, "details") else {},
                 "paper_stake_usd": self._paper_stake(decision),
             }
         except Exception as exc:

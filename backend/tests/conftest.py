@@ -15,4 +15,5 @@ def isolate_from_dotenv(monkeypatch, tmp_path):
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("PAPER_POSITIONS_PATH", str(tmp_path / "paper_positions.json"))
+    monkeypatch.setenv("START_RELAY", "0")
     assert Settings().ensemble_models == []

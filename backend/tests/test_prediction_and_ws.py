@@ -260,6 +260,13 @@ async def test_deep_research_plans_queries_searches_each_and_forecasts_from_a_re
     assert [s["url"] for s in engine.sources("T")] == [
         "https://n.test/shared", "https://n.test/1", "https://n.test/2", "https://n.test/3"]
     assert engine.sources("T")[1]["date"] == ""
+    assert engine.sources("T")[0]["snippet"] == "c"
+    # What the panel shows beside the number: the median run's evidence and the report's gaps.
+    detail = engine.details("T")
+    assert detail["runs"] == [0.62, 0.62] and detail["runs_requested"] == 2
+    assert detail["evidence_for"] == forecast(0.62).evidence_for
+    assert detail["report"]["gaps"] == "No dot plot."
+    assert (detail["model"], detail["search_provider"]) == ("m", "Tavily")
 
 
 async def test_a_shallow_forecast_is_redone_when_deep_research_is_asked_for():

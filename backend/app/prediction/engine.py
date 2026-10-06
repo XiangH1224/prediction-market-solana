@@ -116,6 +116,8 @@ class PredictionEngine:
         # Kept separately so a forecast that fails and is retried does not pay for the search again.
         self._articles: dict[tuple[str, bool], tuple[float, list[dict]]] = {}
         self._latest_sources: dict[str, list[dict]] = {}
+        self._latest_reports: dict[str, dict] = {}
+        self._latest_details: dict[str, dict] = {}
         # One call at a time per model, so a per-model token limit is waited out, not tripped.
         self._model_locks: dict[str, asyncio.Lock] = {}
 
@@ -160,6 +162,7 @@ class PredictionEngine:
         else:
             articles = await self._search(market)
             evidence = f"Recent news ({len(articles)} results):\n{json.dumps(articles, indent=2)}"
+            self._latest_reports.pop(market.ticker, None)
         self._latest_sources[market.ticker] = articles
 
         prompt = f"{describe(market)}\n\n{evidence}"
@@ -184,13 +187,30 @@ class PredictionEngine:
 
         prediction = combine(forecasts, requested=len(runs))
         self._cache[market.ticker] = (time.time(), deep, prediction)
+        median = sorted(forecasts, key=lambda f: f.p_true)[len(forecasts) // 2]
+        self._latest_details[market.ticker] = {
+            **median.model_dump(include={"rules_check", "status_check", "base_rate", "evidence_for", "evidence_against"}),
+            "runs": sorted(f.p_true for f in forecasts),
+            "runs_requested": len(runs),
+            "report": self._latest_reports.get(market.ticker, {}),
+        }
         return prediction
 
     def sources(self, ticker: str) -> list[dict]:
         """The articles the latest forecast for this market was given."""
         return [
-            {"title": a["title"], "url": a["url"], "date": a["date"]} for a in self._latest_sources.get(ticker, [])
+            {"title": a["title"], "url": a["url"], "date": a["date"], "snippet": a.get("snippet", "")}
+            for a in self._latest_sources.get(ticker, [])
         ]
+
+    def details(self, ticker: str) -> dict:
+        """The reasoning behind the latest forecast: the median run's evidence lists, each
+        run's probability, and the research report the runs were given."""
+        return {
+            **self._latest_details.get(ticker, {}),
+            "model": self.settings.xai_model,
+            "search_provider": "Tavily" if self.settings.tavily_api_key else "GDELT",
+        }
 
     # -- evidence ---------------------------------------------------------------
 
@@ -262,9 +282,11 @@ class PredictionEngine:
     async def _report(self, market: Market, articles: list[dict]) -> str:
         """Condense the search results into the dated facts that matter for this market."""
         if not articles:
+            self._latest_reports.pop(market.ticker, None)
             return "Research report: the searches returned nothing relevant."
         prompt = f"{describe(market)}\n\nSearch results ({len(articles)}):\n{json.dumps(articles, indent=1)}"
         report = await self._ask(REPORT_PROMPT, prompt, Report, self.settings.xai_model, 0)
+        self._latest_reports[market.ticker] = report.model_dump()
         facts = "\n".join(f"- {fact}" for fact in report.key_facts) or "- none found"
         return (
             f"Research report (from {len(articles)} search results):\n{facts}\n"

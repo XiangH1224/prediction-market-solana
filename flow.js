@@ -1,10 +1,8 @@
 import {
-  analyzeLocally,
-  connectLocalModel,
+  analyzeWithOrchestrator,
   fetchKalshiEventPage,
   fetchKalshiMarketQuote,
-  fetchRecentCoverage,
-  fetchSourceStatus
+  fetchOrchestratorStatus
 } from "./integrations.js";
 
 const ANALYSIS_HISTORY_KEY = "savedMarketAnalyses";
@@ -193,7 +191,7 @@ function renderSelected() {
 
 function renderSourceStatus() {
   const rows=state.stage === "verdict" ? state.analysis?.researchStatus || state.sourceStatus : state.sourceStatus;
-  return `<section class="source-status"><h3>Sources</h3>${rows?.length ? `<ul>${rows.map(row=>`<li><strong>${escapeHtml(row.source)}</strong> <span>${escapeHtml(row.status)}</span>${row.retrievedAt?`<small>Last retrieved: ${escapeHtml(formatDate(row.retrievedAt))}</small>`:''}${row.reason?`<small>${escapeHtml(row.reason)}</small>`:''}</li>`).join('')}</ul>`:'<p class="fine-print">Analyze to retrieve relevant sources. Unresolved mappings are shown here.</p>'}</section>`;
+  return `<section class="source-status"><h3>Sources</h3>${rows?.length ? `<ul>${rows.map(row=>`<li><strong>${escapeHtml(row.source)}</strong> <span>${escapeHtml(row.status)}</span>${row.retrievedAt?`<small>Last retrieved: ${escapeHtml(formatDate(row.retrievedAt))}</small>`:''}${row.reason?`<small>${escapeHtml(row.reason)}</small>`:''}</li>`).join('')}</ul>`:'<p class="fine-print">Analyze to retrieve relevant sources.</p>'}</section>`;
 }
 
 function renderAnalyzing() {
@@ -214,10 +212,12 @@ function conclusionLead(analysis) {
   const probability = analysis.probabilityPercent;
   if (!Number.isInteger(probability)) return "No defensible Yes/No decision — Probability unavailable—insufficient evidence.";
   const decision = probability > 50 ? "Favors Yes" : probability < 50 ? "Favors No" : "No favored side";
-  return `${decision} — ${probabilityLabel(analysis)} (uncalibrated estimate).`;
+  return `${decision} — ${probabilityLabel(analysis)}.`;
 }
 
 function conclusionSentences(analysis) {
+  // Orchestrator analyses supply their conclusion ready to display.
+  if (Array.isArray(analysis.conclusionLines)) return analysis.conclusionLines.slice(0,4);
   if (analysis.conclusion) return ["marketSignal", "counterSignal", "criticalUnknowns", "uncertaintyDecision"]
     .map(key => analysis.conclusion[key]).filter(Boolean)
     .map(value => [...new Intl.Segmenter("en", {granularity:"sentence"}).segment(value)][0]?.segment.trim()).filter(Boolean);
@@ -258,11 +258,13 @@ function renderVerdict() {
   const sources = (analysis.sources || []).slice(0,3).map((source,index)=>{ const article=state.articles.find(item=>item.id===source.id); return article ? card(article,source,index) : ""; }).join("");
   const previous = previousSavedAnalysis();
   const saved = state.history.some(entry=>entry.id===state.analysisId);
+  // Orchestrator analyses give one conclusion; older saved analyses also carry per-side evidence lists.
+  const evidenceSections = !Array.isArray(analysis.conclusionLines);
   flow.innerHTML = `<div class="flow-step"><button class="back-button" data-action="back-selected" type="button" aria-label="Back to market">←</button><span>${escapeHtml(state.event.title)}</span></div>
     <article class="verdict-sheet"><h2>Overall Conclusion</h2><ol class="overall-conclusion"><li><strong>${escapeHtml(conclusionLead(analysis))}</strong></li>${conclusionSentences(analysis).map(sentence=>`<li>${escapeHtml(sentence)}</li>`).join("")}</ol>
-    <h3>Supports Yes</h3>${points(analysis.supportsYes)}
+    ${evidenceSections ? `<h3>Supports Yes</h3>${points(analysis.supportsYes)}
     <h3>Supports No</h3>${points(analysis.supportsNo)}
-    <h3>Critical Unknowns</h3>${analysis.criticalUnknowns?.length ? `<ol>${analysis.criticalUnknowns.slice(0,3).map(item=>`<li>${escapeHtml(item)}</li>`).join("")}</ol>` : '<p class="fine-print">No specific critical unknowns established.</p>'}
+    <h3>Critical Unknowns</h3>${analysis.criticalUnknowns?.length ? `<ol>${analysis.criticalUnknowns.slice(0,3).map(item=>`<li>${escapeHtml(item)}</li>`).join("")}</ol>` : '<p class="fine-print">No specific critical unknowns established.</p>'}` : ""}
     <h3>Most Relevant Sources</h3>${sources || '<p class="fine-print">No reliable sources available.</p>'}
     ${additional.length ? `<details><summary>Load More Sources (${additional.length})</summary><p class="fine-print">Already retrieved evidence; expanding this list makes no network request.</p>${additional.map((article,index)=>card(article,null,index+chosen.size)).join("")}</details>` : ""}
     <div class="analysis-history-actions"><button id="save-analysis" type="button" class="secondary-button full-button" ${saved || state.savingAnalysis ? "disabled" : ""}>${state.savingAnalysis ? "Saving…" : saved ? "Analysis Saved" : "Save Analysis"}</button>${previous ? renderComparison(previous) : ""}</div>
@@ -432,46 +434,19 @@ async function refreshSelectedQuote({ silent = false } = {}) {
 
 async function analyzeEvent() {
   if (state.busy || !state.event) return;
-  const previousAnalysis = state.history.filter(entry=>entry.market.marketTicker===state.event.marketTicker).at(-1);
   state.analysisId = null;
   state.message = "";
   state.stage = "analyzing";
   state.busy = true;
-  state.message = "Searching reporting and relevant research sources; checking LM Studio…";
   state.coverageError = "";
   state.sourceStatus = [];
   render();
   try {
-    const [coverageResult, modelResult] = await Promise.allSettled([
-      fetchRecentCoverage(state.event, rows=>{state.sourceStatus=rows;if(state.stage==="analyzing")renderAnalyzing();}),
-      connectLocalModel()
-    ]);
-    state.articles = coverageResult.status === "fulfilled" ? coverageResult.value : [];
-    state.coverageError = coverageResult.status === "rejected" ? coverageResult.reason.message : "";
-    if (coverageResult.status === "rejected") throw coverageResult.reason;
-    if (!state.articles.length) {
-      state.model = "";
-      state.analysis = {
-        verdict: "Wait", probabilityPercent: null, insufficientEvidence: true,
-        researchStatus:state.sourceStatus, criticalUnknowns:["No usable source evidence was retrieved; the outcome probability cannot be estimated from the available inputs."],
-        assessment: "Insufficient evidence", assessedAt: new Date().toISOString(), sources: [],
-        explanation: "Available evidence does not support either outcome strongly enough to estimate a probability. A relevant official result or reliable event-specific report could change the assessment.",
-        citations: state.event.rules ? ["RULES"] : []
-      };
-      state.stage = "verdict";
-      state.message = "";
-      return;
-    }
-    if (modelResult.status === "rejected") throw modelResult.reason;
-    state.model = modelResult.value;
-    state.message = `Reviewing ${state.articles.length} source records with ${state.model}… This can take up to two minutes.`;
-    renderAnalyzing();
-    state.analysis = await analyzeLocally({ event: state.event, articles: state.articles, model: state.model, previousAnalysis });
-    state.analysis.researchStatus = state.articles.researchStatus || state.sourceStatus;
-    if (state.analysis.analyzedArticles) {
-      const selected=state.analysis.analyzedArticles;
-      state.articles=[...selected,...state.articles.filter(article=>!selected.some(item=>item.id===article.id))];
-    }
+    // Research and forecasting run in the local orchestrator (backend/); the panel only displays the result.
+    const result = await analyzeWithOrchestrator(state.event, rows=>{state.sourceStatus=rows;if(state.stage==="analyzing")renderAnalyzing();});
+    state.articles = result.articles;
+    state.analysis = result.analysis;
+    state.model = "";
     state.stage = "verdict";
     state.message = "";
   } catch (error) {
@@ -582,7 +557,7 @@ function renderSimulation() {
   const summary = `<div class="order-summary"><div><span>You pay</span><strong>${cost} USDC</strong></div><div><span>You receive</span><strong>${receipt.quantity} ${escapeHtml(receipt.outcome)} units</strong></div><div><span>Price per unit</span><strong>${receipt.unitPriceCents}¢</strong></div><div><span>Network</span><strong>Solana</strong></div><div><span>Routing</span><strong>DFlow</strong></div><div><span>Network fee</span><strong>Not charged</strong></div></div>`;
   let content = "";
   if (sim.step === "wallet") content = `<h2>Connect wallet</h2><p>Choose an account to continue.</p><button type="button" class="wallet-option" data-sim-action="select-wallet"><span class="wallet-icon">◈</span><span><strong>Solana wallet</strong><small>Account 1 · USDC</small></span><span>→</span></button>`;
-  if (sim.step === "connection") content = `<div class="wallet-dialog"><p class="eyebrow">WALLET CONNECTION</p><h2>Connect to Fieldnote?</h2><p>Account 1</p><p>Allow Fieldnote to view your balance and request transaction approval. Each purchase requires your confirmation.</p>${button("connect", "Connect")}${button("cancel", "Cancel", true)}</div>`;
+  if (sim.step === "connection") content = `<div class="wallet-dialog"><p class="eyebrow">WALLET CONNECTION</p><h2>Connect to PredictFlow?</h2><p>Account 1</p><p>Allow PredictFlow to view your balance and request transaction approval. Each purchase requires your confirmation.</p>${button("connect", "Connect")}${button("cancel", "Cancel", true)}</div>`;
   if (sim.step === "routing") content = `<div class="working-state" role="status"><span class="working-mark"></span><h2>Preparing DFlow route</h2><p>USDC → ${escapeHtml(receipt.outcome)} outcome · ${escapeHtml(receipt.marketTicker)}</p></div>`;
   if (sim.step === "quote") content = `<h2>Review order</h2>${summary}<p class="fine-print">Quote expires ${escapeHtml(formatDate(sim.expiresAt))}. Prices can change before approval.</p>${button("review", "Continue")}${button("edit", "Edit purchase", true)}`;
   if (sim.step === "insufficient") content = `<h2>Insufficient USDC</h2><p>This order needs ${cost} USDC. Your available balance is ${(sim.balanceCents / 100).toFixed(2)} USDC.</p>${button("edit", "Change amount")}${button("cancel", "Cancel", true)}`;
@@ -733,7 +708,7 @@ flow.addEventListener("click", async (event) => {
     state.stage = "selected";
     state.sourceStatus = [];
     const sourceTicker=state.event.marketTicker;
-    fetchSourceStatus(state.event).then(rows=>{if(state.event?.marketTicker===sourceTicker && state.stage==="selected"){state.sourceStatus=rows;renderSelected();}}).catch(()=>{});
+    fetchOrchestratorStatus().then(rows=>{if(state.event?.marketTicker===sourceTicker && state.stage==="selected"){state.sourceStatus=rows;renderSelected();}}).catch(()=>{});
     state.message = "";
     state.quoteFreshConfirmed = false;
     render();

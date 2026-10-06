@@ -7,16 +7,15 @@ import {webcrypto} from 'node:crypto';
 const source = (await readFile(new URL('../flow.js', import.meta.url), 'utf8'))
   .replace(/^import\s*\{[\s\S]*?\}\s*from\s*"\.\/integrations.js";/, '')
   .replace(/bootstrap\(\);\s*$/, '');
-function panel(coverage, storage) {
+function panel(analyze, storage) {
   const element = { innerHTML: '', addEventListener() {} };
   const context = vm.createContext({
     document: { querySelector: () => element, addEventListener() {} },
     setInterval, clearInterval, crypto:webcrypto, structuredClone,
     chrome: storage ? {storage:{local:storage}} : undefined,
-    fetchRecentCoverage: coverage,
-    fetchKalshiEventPage: async () => ({markets:[],categories:[],cursor:'',fetchedAt:new Date().toISOString()}),
-    connectLocalModel: async () => 'local-model',
-    analyzeLocally: async () => ({ verdict: 'Yes', probabilityPercent: 63, explanation: 'Sample rationale.', citations: ['RSS1'], sources: [{id: 'RSS1', point: 'A key supporting point.'}] })
+    analyzeWithOrchestrator: analyze,
+    fetchOrchestratorStatus: async () => [],
+    fetchKalshiEventPage: async () => ({markets:[],categories:[],cursor:'',fetchedAt:new Date().toISOString()})
   });
   vm.runInContext(`${source}\nglobalThis.app = { state, analyzeEvent, renderVerdict, saveAnalysis, previousSavedAnalysis, getFilteredMarkets, renderSelected, bootstrap };`, context);
   context.app.state.event = { title: 'Test market' };
@@ -24,7 +23,10 @@ function panel(coverage, storage) {
 }
 
 test('analysis reaches results and displays probability, rationale and sources', async () => {
-  const app = panel(async () => [{ id: 'RSS1', title: 'Test headline', domain: 'Publisher', url: 'https://example.com/news', provider: 'Google News RSS' }]);
+  const app = panel(async () => ({
+    articles: [{ id: 'RSS1', title: 'Test headline', domain: 'Publisher', url: 'https://example.com/news', provider: 'Google News RSS' }],
+    analysis: { verdict: 'Yes', probabilityPercent: 63, explanation: 'Sample rationale.', citations: ['RSS1'], sources: [{id: 'RSS1', point: 'A key supporting point.'}] }
+  }));
   await app.analyzeEvent();
   assert.equal(app.state.stage, 'verdict');
   assert.equal(app.state.busy, false);
@@ -52,7 +54,7 @@ test('assessment displays both evidence sections and only genuinely retrieved ad
   assert.doesNotMatch(app.element.innerHTML,/Exact settlement rules|Resolution condition|Market price · not a forecast|Method and assumptions/);
 });
 
-test('news failures stay visible with retry instead of returning silently to market', async () => {
+test('analysis failures stay visible with retry instead of returning silently to market', async () => {
   const app = panel(async () => { throw new Error('News is unavailable'); });
   await app.analyzeEvent();
   assert.equal(app.state.stage, 'analysis-error');
@@ -61,14 +63,15 @@ test('news failures stay visible with retry instead of returning silently to mar
   assert.match(app.element.innerHTML, /Retry analysis/);
 });
 
-test('empty coverage produces an honest results screen without a fabricated probability', async () => {
-  const app = panel(async () => []);
+test('a forecast made without any sources says so instead of listing sources', async () => {
+  const app = panel(async () => ({articles: [], analysis: {verdict: 'No', probabilityPercent: 20, conclusionLines: ['Rests on the base rate alone.'], sources: []}}));
   await app.analyzeEvent();
   assert.equal(app.state.stage, 'verdict');
-  assert.equal(app.state.analysis.verdict, 'Wait');
-  assert.equal(app.state.analysis.probabilityPercent, null);
   assert.equal(app.state.busy, false);
-  assert.match(app.element.innerHTML, /Probability unavailable/);
+  assert.match(app.element.innerHTML, /Favors No — Yes 20% \/ No 80%/);
+  assert.match(app.element.innerHTML, /Rests on the base rate alone\./);
+  assert.match(app.element.innerHTML, /No reliable sources available\./);
+  assert.doesNotMatch(app.element.innerHTML, /Supports Yes|Supports No|Critical Unknowns/);
   assert.match(app.element.innerHTML, /id="practice-purchase"[^>]*>Buy position/);
   assert.doesNotMatch(app.element.innerHTML, /Analyze again/);
   assert.doesNotMatch(app.element.innerHTML, /Estimated probability of Yes|LOCAL MODEL ·|Practice purchase/);

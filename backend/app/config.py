@@ -98,6 +98,9 @@ class Settings:
     paper_default_stake_usd: float = field(default_factory=lambda: _float("PAPER_DEFAULT_STAKE_USD", 10))
     paper_positions_path: str = field(default_factory=lambda: os.getenv("PAPER_POSITIONS_PATH", "paper_positions.json"))
 
+    # The PredictFlow panel lists markets through the Kalshi relay (news-proxy.mjs); the backend runs it unless told not to.
+    start_relay: bool = field(default_factory=lambda: os.getenv("START_RELAY", "1") != "0")
+
     # Panel auth and audit
     # Optional shared secret for the panel. Empty means any page or extension on this machine may connect.
     panel_token: str = field(default_factory=lambda: os.getenv("PANEL_TOKEN", ""))

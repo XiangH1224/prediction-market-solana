@@ -17,7 +17,8 @@ npm install
 npm run build
 ```
 
-Start the backend (see `backend/README.md`) and open http://localhost:8000/panel.
+This page is superseded by the PredictFlow panel at the repo root. With the backend running it is still
+reachable at http://localhost:8000/panel-legacy.
 
 ## Use it as a Chrome side panel
 
