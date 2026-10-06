@@ -1,3 +1,9 @@
+import { readMappings, redactSecrets } from "./backend-config.mjs";
+import { gnewsQuery } from "./gnews-query.mjs";
+import { createDataSources } from "./data-sources.mjs";
+const dataSources = createDataSources();
+import { createSocialService } from "./social-streams.mjs";
+const socialSources = createSocialService();
 import { createServer } from "node:http";
 import { fetchGoogleNewsRss } from "./rss-relay.mjs";
 
@@ -23,7 +29,7 @@ function send(response, status, body, contentType = "text/plain; charset=utf-8")
     "Cache-Control": "no-store",
     "Content-Type": contentType
   });
-  response.end(body);
+  response.end(redactSecrets(body));
 }
 
 async function fetchKalshiJson(path) {
@@ -175,7 +181,7 @@ async function fetchFeed(query) {
   if (!apiKey) {
     throw Object.assign(new Error("GNews is not configured. Set GNEWS_API_KEY before starting the local relay."), { status: 503 });
   }
-  const normalizedQuery = query.trim().slice(0, 200);
+  const normalizedQuery = gnewsQuery(query);
   const cached = cache.get(normalizedQuery);
   if (cached && cached.expiresAt > Date.now()) return cached.articles;
 
@@ -198,13 +204,14 @@ async function fetchFeed(query) {
       clearTimeout(timeoutId);
     }
     if (!response.ok) {
-      const details = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 180);
-      const message = response.status === 403
+      const message = response.status === 400
+        ? "GNews could not accept the search terms for this market. Google News RSS remains available."
+        : response.status === 403
         ? "GNews rejected the API key or its daily quota is exhausted."
         : response.status === 429
           ? "GNews is rate-limiting requests. Try again later."
-          : `GNews returned HTTP ${response.status}.${details ? ` ${details}` : ""}`;
-      throw Object.assign(new Error(message), { status: response.status === 429 ? 429 : 502 });
+          : `GNews returned HTTP ${response.status}.`;
+      throw Object.assign(new Error(message), { status: response.status === 400 ? 400 : response.status === 429 ? 429 : 502 });
     }
     let payload;
     try {
@@ -232,7 +239,8 @@ async function fetchFeed(query) {
         content: String(article.content || "").trim().slice(0, 4000),
         url: url.href,
         domain: String(article.source?.name || url.hostname).slice(0, 100),
-        date: article.publishedAt || ""
+        date: article.publishedAt || "",
+        retrievedAt: new Date().toISOString()
       }];
     }).slice(0, 10);
     cache.set(normalizedQuery, { articles, expiresAt: Date.now() + cacheDurationMs });
@@ -253,6 +261,31 @@ const server = createServer(async (request, response) => {
   }
 
   const url = new URL(request.url, `http://${host}:${port}`);
+  if (url.pathname === "/health") {
+    send(response, 200, JSON.stringify({ service: "fieldnote-relay", research: true }), "application/json; charset=utf-8");
+    return;
+  }
+  if (url.pathname === "/social") {
+    try {
+      const raw = url.searchParams.get("input") || "{}";
+      if (raw.length > 20000) throw Error();
+      const {event, ids} = JSON.parse(raw);
+      if (!event || typeof event.title !== "string" || typeof event.marketTicker !== "string" || (ids && (!Array.isArray(ids) || ids.length > 6 || ids.some(id => typeof id !== "string")))) throw Error();
+      send(response, 200, JSON.stringify(await socialSources.validated(event, ids)), "application/json; charset=utf-8");
+    } catch { send(response, 400, "Social evidence unavailable"); }
+    return;
+  }
+  if (url.pathname === "/research") {
+    try {
+      const input = JSON.parse(url.searchParams.get("input") || "{}");
+      if (!input.event || JSON.stringify(input).length > 20000) throw new Error("Invalid research request");
+      const mappings = readMappings();
+      const provider = url.searchParams.get("provider");
+      const result = provider ? await dataSources.fetchSource(input.event, provider, mappings) : {status:dataSources.status(input.event, mappings), gnewsConfigured:Boolean(process.env.GNEWS_API_KEY)};
+      send(response, 200, JSON.stringify(result), "application/json; charset=utf-8");
+    } catch (error) { send(response, 400, error.message || "Research request failed"); }
+    return;
+  }
   if (url.pathname === "/rss") {
     try {
       const xml = await fetchGoogleNewsRss(url.searchParams.get("q"));
@@ -270,7 +303,7 @@ const server = createServer(async (request, response) => {
     send(response, 404, "Not found");
     return;
   }
-  const query = (url.searchParams.get("q") || "").trim().slice(0, 240);
+  const query = (url.searchParams.get("q") || "").trim();
   if (!query) {
     send(response, 400, "A search query is required");
     return;
@@ -284,6 +317,20 @@ const server = createServer(async (request, response) => {
   }
 });
 
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(`Port ${port} is already in use. Stop the older relay with Ctrl+C in its terminal, then run npm run news:proxy again.`);
+    console.error(`To identify the listener: lsof -nP -iTCP:${port} -sTCP:LISTEN`);
+  } else {
+    console.error(`Relay could not start: ${error.code || "unknown error"}`);
+  }
+  process.exitCode = 1;
+});
+
 server.listen(port, host, () => {
+  socialSources.start();
   console.log(`GNews and Kalshi relay listening on http://${host}:${port}`);
 });
+
+server.on("close", () => socialSources.stop());
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { socialSources.stop(); server.close(); });

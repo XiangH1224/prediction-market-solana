@@ -69,7 +69,8 @@ test('empty coverage produces an honest results screen without a fabricated prob
   assert.equal(app.state.analysis.probabilityPercent, null);
   assert.equal(app.state.busy, false);
   assert.match(app.element.innerHTML, /Probability unavailable/);
-  assert.match(app.element.innerHTML, /Analyze again/);
+  assert.match(app.element.innerHTML, /id="practice-purchase"[^>]*>Buy position/);
+  assert.doesNotMatch(app.element.innerHTML, /Analyze again/);
   assert.doesNotMatch(app.element.innerHTML, /Estimated probability of Yes|LOCAL MODEL ·|Practice purchase/);
 });
 
@@ -141,4 +142,34 @@ test('overall conclusion comes first and is limited to five numbered sentences',
   const list=app.element.innerHTML.match(/<ol class="overall-conclusion">([\s\S]*?)<\/ol>/)[1];
   assert.equal((list.match(/<li>/g)||[]).length,5);
   assert.ok(app.element.innerHTML.indexOf('Overall Conclusion')<app.element.innerHTML.indexOf('Supports Yes'));
+});
+
+
+test('conclusion leads with the final side and renders signals in order before unchanged details', () => {
+  const app = panel(async () => []);
+  app.state.analysis = {probabilityPercent:35, sources:[], explanation:'Legacy explanation.', conclusion:{
+    marketSignal:'Revenue fell 12%.', counterSignal:'New orders rose 3%.', criticalUnknowns:'The next earnings release is pending.', uncertaintyDecision:'That uncertainty leaves No favored at 65%.'
+  }};
+  app.renderVerdict();
+  const html = app.element.innerHTML;
+  const conclusion = html.match(/<ol class="overall-conclusion">([\s\S]*?)<\/ol>/)[1];
+  assert.equal((conclusion.match(/<li>/g) || []).length,5);
+  const ordered = ['Favors No', 'Yes 35% / No 65%', 'Revenue fell 12%', 'New orders rose 3%', 'earnings release', 'leaves No favored'];
+  for (let i=1;i<ordered.length;i++) assert.ok(conclusion.indexOf(ordered[i-1]) < conclusion.indexOf(ordered[i]));
+  assert.doesNotMatch(conclusion,/Legacy explanation/);
+  assert.ok(html.indexOf('Save Analysis') < html.indexOf('Buy position'));
+});
+
+test('Sources displays retrieval status without changing the analysis and additional-source disclosure',()=>{
+ const app=panel(async()=>[]);
+ app.state.stage='verdict';
+ app.state.event={title:'Fixture market',marketTicker:'FIXTURE'};
+ app.state.analysis={probabilityPercent:60,explanation:'Fixture.',sources:[],researchStatus:[{source:'BLS',status:'Cached',retrievedAt:'2026-10-05T00:00:00Z'},{source:'FRED / ALFRED',status:'Not configured'}]};
+ app.state.articles=[{id:'BLS-fixture',title:'Fixture data',url:'https://www.bls.gov/news.release/cpi.nr0.htm',domain:'BLS'}];
+ app.renderVerdict();
+ assert.match(app.element.innerHTML,/<h3>Sources<\/h3>/);
+ assert.match(app.element.innerHTML,/Cached/);
+ assert.match(app.element.innerHTML,/Last retrieved:/);
+ assert.match(app.element.innerHTML,/expanding this list makes no network request/);
+ assert.match(app.element.innerHTML,/Buy position/);
 });

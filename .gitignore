@@ -1,3 +1,10 @@
 node_modules/
 .DS_Store
 panel.bundle.js
+.env
+.env.*
+!.env.example
+data-source-mappings.local.json
+social-monitoring.local.json
+.social-state.json
+.social-state.json.tmp

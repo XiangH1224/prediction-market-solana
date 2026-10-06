@@ -1,0 +1,18 @@
+{
+  "bluesky": {"accounts": [], "terms": []},
+  "x": {"authorIds": [], "rules": []},
+  "markets": {
+    "REPLACE_WITH_EXACT_KALSHI_TICKER": {
+      "question": "Replace with the exact market question",
+      "settlementRules": "Replace with the exact supplied Kalshi settlement rules",
+      "participants": [["Exact participant name", "Unambiguous alias"]],
+      "event": ["Exact event name"],
+      "condition": ["Exact settlement-related claim"],
+      "dates": [],
+      "location": [],
+      "startAt": "2026-10-01T00:00:00Z",
+      "endAt": "2026-10-31T23:59:59Z",
+      "maxAgeHours": 24
+    }
+  }
+}

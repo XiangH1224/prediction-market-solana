@@ -412,3 +412,11 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 3px; color
 .overall-conclusion li:first-child { color: var(--forest); font-size: 18px; }
 .analysis-history-actions { border-top: 1px solid #dce7df; margin-top: 20px; padding-top: 14px; }
 .analysis-comparison p { font-size: 13px; line-height: 1.6; }
+
+.purchase-quote p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+.source-status { margin: 18px 0; padding: 12px; border: 1px solid #d6e1da; border-radius: 8px; }
+.source-status ul { list-style: none; padding: 0; }
+.source-status li { margin: 10px 0; font-size: 12px; }
+.source-status li span { color: var(--forest); }
+.source-status small { display: block; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }

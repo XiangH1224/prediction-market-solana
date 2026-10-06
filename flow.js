@@ -3,7 +3,8 @@ import {
   connectLocalModel,
   fetchKalshiEventPage,
   fetchKalshiMarketQuote,
-  fetchRecentCoverage
+  fetchRecentCoverage,
+  fetchSourceStatus
 } from "./integrations.js";
 
 const ANALYSIS_HISTORY_KEY = "savedMarketAnalyses";
@@ -13,6 +14,7 @@ const SELECTED_REFRESH_MS = 30000;
 const PRACTICE_QUOTE_MAX_AGE_MS = 15000;
 
 const state = {
+  sourceStatus: [],
   stage: "search",
   view: "markets",
   query: "",
@@ -184,25 +186,41 @@ function renderSelected() {
     </article>
     ${state.history.some(entry=>entry.market.marketTicker===market.marketTicker) ? `<details class="saved-analyses"><summary>Saved Analyses</summary>${state.history.filter(entry=>entry.market.marketTicker===market.marketTicker).slice().reverse().map(entry=>`<button type="button" class="secondary-button full-button" data-saved-analysis="${escapeHtml(entry.id)}">${escapeHtml(formatDate(entry.savedAt))} · ${escapeHtml(probabilityLabel(entry.analysis))}</button>`).join("")}</details>` : ""}
     <button id="analyze-event" class="primary-button full-button" type="button" ${state.busy ? "disabled" : ""}>Analyze this market</button>
+    ${renderSourceStatus()}
     <p class="fine-print">Analysis uses market rules and recent coverage. No funds move.</p>
   `;
+}
+
+function renderSourceStatus() {
+  const rows=state.stage === "verdict" ? state.analysis?.researchStatus || state.sourceStatus : state.sourceStatus;
+  return `<section class="source-status"><h3>Sources</h3>${rows?.length ? `<ul>${rows.map(row=>`<li><strong>${escapeHtml(row.source)}</strong> <span>${escapeHtml(row.status)}</span>${row.retrievedAt?`<small>Last retrieved: ${escapeHtml(formatDate(row.retrievedAt))}</small>`:''}${row.reason?`<small>${escapeHtml(row.reason)}</small>`:''}</li>`).join('')}</ul>`:'<p class="fine-print">Analyze to retrieve relevant sources. Unresolved mappings are shown here.</p>'}</section>`;
 }
 
 function renderAnalyzing() {
   flow.innerHTML = `
     <div class="flow-step"><span>03</span><span>RESEARCH & ANALYSIS</span><span class="step-rule"></span></div>
-    <div class="working-state" role="status"><span class="working-mark"></span><h2>Reviewing the evidence</h2><p>Your assessment will appear here shortly.</p></div>
+    <div class="working-state" role="status"><span class="working-mark"></span><h2>Reviewing the evidence</h2><p>Your assessment will appear here shortly.</p></div>${renderSourceStatus()}
   `;
 }
 
 function renderAnalysisError() {
-  flow.innerHTML = `<section class="event-detail"><h2>Analysis could not finish</h2>
+  flow.innerHTML = `<section class="event-detail"><h2>Analysis could not finish</h2>${renderSourceStatus()}
     <p class="integration-message is-error" role="alert">${escapeHtml(state.message)}</p>
     <button id="analyze-event" class="primary-button full-button" type="button">Retry analysis</button>
     <button class="secondary-button full-button" data-action="back-selected" type="button">Back to market</button></section>`;
 }
 
+function conclusionLead(analysis) {
+  const probability = analysis.probabilityPercent;
+  if (!Number.isInteger(probability)) return "No defensible Yes/No decision — Probability unavailable—insufficient evidence.";
+  const decision = probability > 50 ? "Favors Yes" : probability < 50 ? "Favors No" : "No favored side";
+  return `${decision} — ${probabilityLabel(analysis)} (uncalibrated estimate).`;
+}
+
 function conclusionSentences(analysis) {
+  if (analysis.conclusion) return ["marketSignal", "counterSignal", "criticalUnknowns", "uncertaintyDecision"]
+    .map(key => analysis.conclusion[key]).filter(Boolean)
+    .map(value => [...new Intl.Segmenter("en", {granularity:"sentence"}).segment(value)][0]?.segment.trim()).filter(Boolean);
   return [...new Intl.Segmenter("en", {granularity:"sentence"}).segment(analysis.explanation || "")].slice(0,4).map(item=>item.segment.trim());
 }
 
@@ -241,15 +259,16 @@ function renderVerdict() {
   const previous = previousSavedAnalysis();
   const saved = state.history.some(entry=>entry.id===state.analysisId);
   flow.innerHTML = `<div class="flow-step"><button class="back-button" data-action="back-selected" type="button" aria-label="Back to market">←</button><span>${escapeHtml(state.event.title)}</span></div>
-    <article class="verdict-sheet"><h2>Overall Conclusion</h2><ol class="overall-conclusion"><li><strong>${escapeHtml(probabilityLabel(analysis))}${Number.isInteger(analysis.probabilityPercent) ? " (uncalibrated)." : "."}</strong></li>${conclusionSentences(analysis).map(sentence=>`<li>${escapeHtml(sentence)}</li>`).join("")}</ol>
+    <article class="verdict-sheet"><h2>Overall Conclusion</h2><ol class="overall-conclusion"><li><strong>${escapeHtml(conclusionLead(analysis))}</strong></li>${conclusionSentences(analysis).map(sentence=>`<li>${escapeHtml(sentence)}</li>`).join("")}</ol>
     <h3>Supports Yes</h3>${points(analysis.supportsYes)}
     <h3>Supports No</h3>${points(analysis.supportsNo)}
     <h3>Critical Unknowns</h3>${analysis.criticalUnknowns?.length ? `<ol>${analysis.criticalUnknowns.slice(0,3).map(item=>`<li>${escapeHtml(item)}</li>`).join("")}</ol>` : '<p class="fine-print">No specific critical unknowns established.</p>'}
     <h3>Most Relevant Sources</h3>${sources || '<p class="fine-print">No reliable sources available.</p>'}
-    ${additional.length ? `<details><summary>Load More Sources (${additional.length})</summary>${additional.map((article,index)=>card(article,null,index+chosen.size)).join("")}</details>` : ""}
+    ${additional.length ? `<details><summary>Load More Sources (${additional.length})</summary><p class="fine-print">Already retrieved evidence; expanding this list makes no network request.</p>${additional.map((article,index)=>card(article,null,index+chosen.size)).join("")}</details>` : ""}
     <div class="analysis-history-actions"><button id="save-analysis" type="button" class="secondary-button full-button" ${saved || state.savingAnalysis ? "disabled" : ""}>${state.savingAnalysis ? "Saving…" : saved ? "Analysis Saved" : "Save Analysis"}</button>${previous ? renderComparison(previous) : ""}</div>
     ${state.message ? `<p class="fine-print" role="status">${escapeHtml(state.message)}</p>` : ""}</article>
-    <div class="decision-actions">${analysis.insufficientEvidence ? '<button id="analyze-event" class="primary-button" type="button">Analyze again</button>' : '<button id="practice-purchase" class="primary-button" type="button">Buy position</button>'}<button id="skip-event" class="secondary-button" type="button">Back to markets</button></div>`;
+    ${renderSourceStatus()}
+    <div class="decision-actions"><button id="practice-purchase" class="primary-button" type="button">Buy position</button><button id="skip-event" class="secondary-button" type="button">Back to markets</button></div>`;
 }
 
 async function saveAnalysis() {
@@ -262,7 +281,7 @@ async function saveAnalysis() {
     if (!globalThis.chrome?.storage?.local) throw new Error("Saving requires the Chrome extension's local storage.");
     const id = state.analysisId || crypto.randomUUID();
     const {analyzedArticles, ...analysis} = state.analysis;
-    const entry = { id, savedAt:new Date().toISOString(), market:structuredClone(state.event), analysis:structuredClone(analysis), articles:state.articles.map(({id,title,url,domain,date,provider})=>({id,title,url,domain,date,provider})) };
+    const entry = { id, savedAt:new Date().toISOString(), market:structuredClone(state.event), analysis:structuredClone(analysis), articles:state.articles.map(({id,title,url,domain,date,provider,publishedAt,observationAt,retrievedAt,vintage,originUrl,access,settlementSource,units,limitations,seasonalAdjustment,frequency})=>({id,title,url,domain,date,provider,publishedAt,observationAt,retrievedAt,vintage,originUrl,access,settlementSource,units,limitations,seasonalAdjustment,frequency})) };
     const stored = await chrome.storage.local.get([ANALYSIS_HISTORY_KEY,FOLLOWED_KEY]);
     const existing = Array.isArray(stored[ANALYSIS_HISTORY_KEY]) ? stored[ANALYSIS_HISTORY_KEY] : state.history;
     const history = [...existing.filter(item=>item.id!==id),entry];
@@ -277,17 +296,17 @@ async function saveAnalysis() {
 function renderPurchase() {
   const priceCents = getOutcomePrice();
   const totalCents = priceCents === null ? null : priceCents * state.quantity;
-  const chooseOutcome = state.analysis.verdict === "Wait" && !state.purchaseOutcome;
+  const chooseOutcome = !state.purchaseOutcome;
   const canConfirm = state.quoteFreshConfirmed && Date.now() - state.quoteConfirmedAt <= PRACTICE_QUOTE_MAX_AGE_MS;
   flow.innerHTML = `
-    <div class="flow-step"><button class="back-button" data-action="back-verdict" type="button" aria-label="Back to forecast">←</button><span>04</span><span>REVIEW PURCHASE</span><span class="step-rule"></span></div>
+    <div class="flow-step"><button class="back-button" data-action="back-verdict" type="button" aria-label="Back to forecast">←</button><span>04</span><span>PURCHASE CONFIRMATION</span><span class="step-rule"></span></div>
     <article class="event-detail purchase-event"><p class="detail-kicker">${escapeHtml(state.event.marketTicker)}</p><h2>${escapeHtml(state.event.title)}</h2></article>
-    ${state.analysis.verdict === "Wait" ? `<div class="wait-purchase-choice"><p class="detail-label">Choose an outcome</p><div class="outcome-picker" role="group" aria-label="Choose outcome">${["Yes", "No"].map((outcome) => `<button class="outcome-button ${state.purchaseOutcome === outcome ? "is-selected" : ""}" data-purchase-outcome="${outcome}" type="button" aria-pressed="${state.purchaseOutcome === outcome}">${outcome}</button>`).join("")}</div></div>` : ""}
+    <div class="wait-purchase-choice"><p class="detail-label">Choose an outcome</p><div class="outcome-picker" role="group" aria-label="Choose outcome">${["Yes", "No"].map((outcome) => `<button class="outcome-button ${state.purchaseOutcome === outcome ? "is-selected" : ""}" data-purchase-outcome="${outcome}" type="button" aria-pressed="${state.purchaseOutcome === outcome}">${outcome}</button>`).join("")}</div></div>
     <label class="quantity-label" for="quantity-input"><span>Quantity</span><input class="quantity-input" id="quantity-input" type="number" min="1" max="1000" step="1" value="${state.quantity}"></label>
-    ${priceCents !== null ? `<div class="purchase-quote"><span>Current ${escapeHtml(state.purchaseOutcome)} ask · order total</span><strong>${priceCents}¢ × ${state.quantity} = $${(totalCents / 100).toFixed(2)}</strong></div>` : state.purchaseOutcome ? '<p class="fine-print" role="status">No price is currently available for this outcome.</p>' : ""}
+    ${priceCents !== null ? `<div class="purchase-quote"><span>${escapeHtml(state.purchaseOutcome)} position · purchase amount</span><strong>${priceCents}¢ × ${state.quantity} = $${(totalCents / 100).toFixed(2)}</strong><p>Current market price: ${priceCents}¢ (${priceCents}% implied probability) · Estimated position: ${state.quantity} ${escapeHtml(state.purchaseOutcome)} units</p></div>` : state.purchaseOutcome ? '<p class="fine-print" role="status">No price is currently available for this outcome.</p>' : ""}
     <p class="market-update">Quote updated ${escapeHtml(formatDate(state.event.quoteFetchedAt))}</p>
     ${state.message ? `<p class="integration-message ${canConfirm ? "" : "is-error"}" role="status">${escapeHtml(state.message)}</p>` : ""}
-    <button id="complete-simulated-purchase" class="primary-button full-button" type="button" ${state.busy || state.refreshingQuote || !state.quoteFreshConfirmed || chooseOutcome || priceCents === null ? "disabled" : ""}>Review purchase</button>
+    <button id="complete-simulated-purchase" class="primary-button full-button" type="button" ${state.busy || chooseOutcome || priceCents === null ? "disabled" : ""}>Confirm Purchase</button>
     <button id="skip-purchase" class="secondary-button full-button" type="button" ${state.busy ? "disabled" : ""}>Cancel</button>
     <p class="fine-print">No funds move.</p>
   `;
@@ -301,7 +320,7 @@ function renderComplete() {
     <div class="receipt-details"><div><span>Reference</span><strong>${escapeHtml(receipt.reference)}</strong></div><div><span>Available balance</span><strong>${((receipt.simulation?.balanceCents || 0) / 100).toFixed(2)} USDC</strong></div><div><span>Completed</span><strong>${escapeHtml(formatDate(receipt.completedAt || receipt.createdAt))}</strong></div></div>
     ${receipt.saveWarning ? `<p role="alert">${escapeHtml(receipt.saveWarning)}</p>` : ""}
     <details><summary>Activity</summary><ol class="simulation-log">${(receipt.simulation?.log || []).map(entry => `<li><strong>${escapeHtml(entry.action)}</strong><p>${escapeHtml(entry.response)}</p></li>`).join("")}</ol></details>
-    <button id="new-search" class="primary-button full-button" type="button">Back to markets</button></section>`;
+    <div class="decision-actions"><button id="back-buy-position" class="primary-button" type="button">Back to Buy position</button><button id="new-search" class="secondary-button" type="button">Back to markets</button></div></section>`;
 }
 
 function searchEvents(query = state.query) {
@@ -418,12 +437,13 @@ async function analyzeEvent() {
   state.message = "";
   state.stage = "analyzing";
   state.busy = true;
-  state.message = "Searching recent coverage and checking LM Studio…";
+  state.message = "Searching reporting and relevant research sources; checking LM Studio…";
   state.coverageError = "";
+  state.sourceStatus = [];
   render();
   try {
     const [coverageResult, modelResult] = await Promise.allSettled([
-      fetchRecentCoverage(state.event),
+      fetchRecentCoverage(state.event, rows=>{state.sourceStatus=rows;if(state.stage==="analyzing")renderAnalyzing();}),
       connectLocalModel()
     ]);
     state.articles = coverageResult.status === "fulfilled" ? coverageResult.value : [];
@@ -433,6 +453,7 @@ async function analyzeEvent() {
       state.model = "";
       state.analysis = {
         verdict: "Wait", probabilityPercent: null, insufficientEvidence: true,
+        researchStatus:state.sourceStatus, criticalUnknowns:["No usable source evidence was retrieved; the outcome probability cannot be estimated from the available inputs."],
         assessment: "Insufficient evidence", assessedAt: new Date().toISOString(), sources: [],
         explanation: "Available evidence does not support either outcome strongly enough to estimate a probability. A relevant official result or reliable event-specific report could change the assessment.",
         citations: state.event.rules ? ["RULES"] : []
@@ -443,10 +464,14 @@ async function analyzeEvent() {
     }
     if (modelResult.status === "rejected") throw modelResult.reason;
     state.model = modelResult.value;
-    state.message = `Reviewing ${state.articles.length} news items with ${state.model}… This can take up to two minutes.`;
+    state.message = `Reviewing ${state.articles.length} source records with ${state.model}… This can take up to two minutes.`;
     renderAnalyzing();
     state.analysis = await analyzeLocally({ event: state.event, articles: state.articles, model: state.model, previousAnalysis });
-    if (state.analysis.analyzedArticles) state.articles = state.analysis.analyzedArticles;
+    state.analysis.researchStatus = state.articles.researchStatus || state.sourceStatus;
+    if (state.analysis.analyzedArticles) {
+      const selected=state.analysis.analyzedArticles;
+      state.articles=[...selected,...state.articles.filter(article=>!selected.some(item=>item.id===article.id))];
+    }
     state.stage = "verdict";
     state.message = "";
   } catch (error) {
@@ -550,26 +575,28 @@ function logSimulation(actor, action, responder, response) {
 function renderSimulation() {
   const sim = state.simulation;
   const receipt = state.receipt;
-  const steps = ["wallet", "quote", "approval", "submitted", "settlement", "settled"];
-  const labels = ["Wallet", "Quote", "Approve", "Processing", "Settling", "Complete"];
+  const steps = ["wallet", "routing", "quote", "approval", "submitting", "submitted", "settled"];
+  const labels = ["Wallet", "Route", "Review", "Approve", "Submit", "Process", "Result"];
   const button = (action, label, secondary = false) => `<button type="button" class="${secondary ? "secondary" : "primary"}-button full-button" data-sim-action="${action}">${label}</button>`;
   const cost = (receipt.totalCents / 100).toFixed(2);
   const summary = `<div class="order-summary"><div><span>You pay</span><strong>${cost} USDC</strong></div><div><span>You receive</span><strong>${receipt.quantity} ${escapeHtml(receipt.outcome)} units</strong></div><div><span>Price per unit</span><strong>${receipt.unitPriceCents}¢</strong></div><div><span>Network</span><strong>Solana</strong></div><div><span>Routing</span><strong>DFlow</strong></div><div><span>Network fee</span><strong>Not charged</strong></div></div>`;
   let content = "";
   if (sim.step === "wallet") content = `<h2>Connect wallet</h2><p>Choose an account to continue.</p><button type="button" class="wallet-option" data-sim-action="select-wallet"><span class="wallet-icon">◈</span><span><strong>Solana wallet</strong><small>Account 1 · USDC</small></span><span>→</span></button>`;
   if (sim.step === "connection") content = `<div class="wallet-dialog"><p class="eyebrow">WALLET CONNECTION</p><h2>Connect to Fieldnote?</h2><p>Account 1</p><p>Allow Fieldnote to view your balance and request transaction approval. Each purchase requires your confirmation.</p>${button("connect", "Connect")}${button("cancel", "Cancel", true)}</div>`;
+  if (sim.step === "routing") content = `<div class="working-state" role="status"><span class="working-mark"></span><h2>Preparing DFlow route</h2><p>USDC → ${escapeHtml(receipt.outcome)} outcome · ${escapeHtml(receipt.marketTicker)}</p></div>`;
   if (sim.step === "quote") content = `<h2>Review order</h2>${summary}<p class="fine-print">Quote expires ${escapeHtml(formatDate(sim.expiresAt))}. Prices can change before approval.</p>${button("review", "Continue")}${button("edit", "Edit purchase", true)}`;
   if (sim.step === "insufficient") content = `<h2>Insufficient USDC</h2><p>This order needs ${cost} USDC. Your available balance is ${(sim.balanceCents / 100).toFixed(2)} USDC.</p>${button("edit", "Change amount")}${button("cancel", "Cancel", true)}`;
   if (sim.step === "expired") content = `<h2>Quote expired</h2><p>Review an updated quote before approving your purchase.</p>${button("requote", "Get new quote")}`;
   if (sim.step === "approval") content = `<div class="wallet-dialog"><p class="eyebrow">ACCOUNT 1 · APPROVAL REQUEST</p><h2>Approve purchase?</h2>${summary}<p>You authorize the amount shown above.</p>${button("approve", "Approve")}${button("reject", "Reject", true)}</div>`;
-  if (sim.step === "submitted") content = `<div class="working-state" role="status"><span class="working-mark"></span><h2>Processing order</h2><p>Approval received. Finding liquidity for your ${escapeHtml(receipt.outcome)} position.</p></div>`;
+  if (sim.step === "submitting") content = `<div class="working-state" role="status"><span class="working-mark"></span><h2>Submitting transaction</h2><p>Wallet approval received. Preparing the Solana order.</p></div>`;
+  if (sim.step === "submitted") content = `<div class="working-state" role="status"><span class="working-mark"></span><h2>Processing order</h2><p>Order submitted. Waiting for the route to fill your ${escapeHtml(receipt.outcome)} position.</p></div>`;
   if (sim.step === "settlement") content = `<div class="working-state" role="status"><span class="working-mark"></span><h2>Finalizing purchase</h2><p>Order filled. Updating your balance and position.</p></div>`;
   if (sim.step === "settled") content = `<div class="complete-mark">✓</div><h2>Purchase complete</h2><p>${sim.position} ${escapeHtml(receipt.outcome)} units added to your position.</p>${summary}${button("receipt", "View receipt")}`;
   if (sim.step === "failed") content = `<h2>Order could not be filled</h2><p>Your reserved USDC has been released. No position was added.</p>${button("requote", "Try again")}`;
   if (sim.step === "cancelled") content = `<h2>Purchase cancelled</h2><p>No position was added. Your available balance is unchanged.</p>${button("requote", "Try again")}`;
   flow.innerHTML = `<section class="event-detail"><div class="checkout-heading"><p class="eyebrow">DFLOW · SOLANA</p><span class="no-funds-badge">No funds move</span></div><h3>${escapeHtml(receipt.eventTitle)}</h3>
-    <ol class="simulation-progress">${labels.map((label, i) => `<li ${steps[i] === sim.step ? 'aria-current="step"' : ''}>${label}</li>`).join("")}</ol>
-    ${content}
+    <ol class="simulation-progress">${labels.map((label, i) => `<li ${(steps[i] === sim.step || (steps[i] === "wallet" && sim.step === "connection") || (steps[i] === "submitted" && sim.step === "settlement")) ? 'aria-current="step"' : ''}>${label}</li>`).join("")}</ol>
+    <div aria-live="polite" aria-atomic="true">${content}</div>
     ${["wallet", "quote", "expired"].includes(sim.step) ? button("cancel", "Cancel", true) : ""}
     ${["cancelled", "failed"].includes(sim.step) ? button("exit", "Back to markets", true) : ""}
     <div class="order-summary"><div><span>Available</span><strong>${(sim.balanceCents / 100).toFixed(2)} USDC</strong></div>${sim.reservedCents ? `<div><span>Reserved</span><strong>${(sim.reservedCents / 100).toFixed(2)} USDC</strong></div>` : ""}</div>
@@ -578,11 +605,11 @@ function renderSimulation() {
 
 function runPurchaseTransitions() {
   const session = state.simulation;
-  if (!session || state.stage !== "simulation" || !["submitted", "settlement"].includes(session.step)) return;
+  if (!session || state.stage !== "simulation" || !["routing", "submitting", "submitted", "settlement"].includes(session.step)) return;
   const expected = session.step;
   setTimeout(async () => {
     if (state.stage !== "simulation" || state.simulation !== session || session.step !== expected) return;
-    await advanceSimulation(expected === "submitted" ? "fill" : "settle");
+    await advanceSimulation({routing:"route-ready", submitting:"submit", submitted:"fill", settlement:"settle"}[expected]);
     runPurchaseTransitions();
   }, 1400);
 }
@@ -599,25 +626,30 @@ async function advanceSimulation(action) {
     state.stage = "purchase"; state.message = ""; state.quoteFreshConfirmed = false; render(); refreshSelectedQuote({silent: true}); return;
   } else if (action === "connect" && ["wallet", "connection"].includes(sim.step)) {
     if (sim.scenario === "insufficient") sim.balanceCents = 0;
+    sim.step = "routing";
+    record("Wallet connected. Preparing the USDC-to-outcome route.");
+  } else if (action === "route-ready" && sim.step === "routing") {
     quote();
     if (sim.scenario === "expired") sim.expiresAt = 0;
-    record("Wallet connected. Quote ready.");
+    record("Route ready. Review the quote before wallet approval.");
   } else if (action === "review" && sim.step === "quote") {
     sim.step = Date.now() >= sim.expiresAt ? "expired" : sim.balanceCents < cost ? "insufficient" : "approval";
     record(sim.step === "approval" ? "Quote accepted; waiting for wallet approval." : `Cannot continue: ${sim.step}.`);
   } else if (action === "fund" && sim.step === "insufficient") {
     sim.balanceCents += Math.max(100000, cost - sim.balanceCents); quote(); record("Balance updated; quote ready.");
   } else if (action === "requote" && ["expired", "failed", "cancelled"].includes(sim.step)) {
-    sim.scenario = "success"; sim.signature = null; sim.orderId = null; quote(); record("Quote updated. Approval required again.");
+    sim.scenario = "success"; sim.signature = null; sim.orderId = null; sim.step = "routing"; record("Preparing a new route. Approval required again.");
   } else if (action === "approve" && sim.step === "approval") {
     if (Date.now() >= sim.expiresAt) { sim.step = "expired"; record("Quote expired before approval; no funds reserved."); }
     else if (sim.balanceCents < cost) { sim.step = "insufficient"; record("Insufficient funds; no order created."); }
     else {
       sim.signature = `DEMO-SIGNATURE-${crypto.randomUUID()}`;
       sim.orderId = `DEMO-ORDER-${crypto.randomUUID()}`;
-      sim.balanceCents -= cost; sim.reservedCents = cost; sim.step = "submitted";
+      sim.balanceCents -= cost; sim.reservedCents = cost; sim.step = "submitting";
       record("Approval received; order processing. USDC reserved.");
     }
+  } else if (action === "submit" && sim.step === "submitting") {
+    sim.step = "submitted"; record("Order submitted. Waiting for execution.");
   } else if (action === "fill" && sim.step === "submitted") {
     if (sim.scenario === "failed") { sim.balanceCents += sim.reservedCents; sim.reservedCents = 0; sim.step = "failed"; record("Fill failed; reserved USDC released."); }
     else { sim.step = "settlement"; record("Order filled. Settlement pending."); }
@@ -699,6 +731,9 @@ flow.addEventListener("click", async (event) => {
     state.event = state.markets.find((market) => market.marketTicker === marketButton.dataset.marketTicker) || state.history.find(entry=>entry.market.marketTicker===marketButton.dataset.marketTicker)?.market;
     if (!state.event) return;
     state.stage = "selected";
+    state.sourceStatus = [];
+    const sourceTicker=state.event.marketTicker;
+    fetchSourceStatus(state.event).then(rows=>{if(state.event?.marketTicker===sourceTicker && state.stage==="selected"){state.sourceStatus=rows;renderSelected();}}).catch(()=>{});
     state.message = "";
     state.quoteFreshConfirmed = false;
     render();
@@ -738,29 +773,35 @@ flow.addEventListener("click", async (event) => {
     analyzeEvent();
     return;
   }
-  if (event.target.closest("#practice-purchase")) {
-    state.purchaseOutcome = state.analysis.verdict === "Wait" ? null : state.analysis.verdict;
+  if (event.target.closest("#practice-purchase") || event.target.closest("#back-buy-position")) {
+    const returningToPurchase = Boolean(event.target.closest("#back-buy-position"));
+    state.purchaseOutcome = returningToPurchase ? state.receipt.outcome : state.analysis.verdict === "Wait" ? "Yes" : state.analysis.verdict;
+    state.receipt = null;
+    state.simulation = null;
     state.quoteFreshConfirmed = false;
     state.quoteConfirmedAt = 0;
     state.stage = "purchase";
     state.message = "";
     render();
-    refreshSelectedQuote({ silent: true });
     return;
   }
   const outcomeButton = event.target.closest("[data-purchase-outcome]");
   if (outcomeButton) {
     state.purchaseOutcome = outcomeButton.dataset.purchaseOutcome;
     state.quoteFreshConfirmed = false;
+    state.message = "";
     renderPurchase();
-    refreshSelectedQuote({ silent: true });
     return;
   }
   if (event.target.closest("#complete-simulated-purchase")) {
     await completeSimulatedPurchase();
     return;
   }
-  if (event.target.closest("#skip-event") || event.target.closest("#skip-purchase") || event.target.closest("#new-search")) {
+  if (event.target.closest("#skip-purchase")) {
+    clearSelectedQuoteTimer();
+    state.stage = "verdict"; state.message = ""; render(); return;
+  }
+  if (event.target.closest("#skip-event") || event.target.closest("#new-search")) {
     clearSelectedQuoteTimer();
     state.stage = "search";
     state.event = null;

@@ -51,7 +51,7 @@ test("Yes and No confirmation persist a simulated DFlow route without a live req
     });
     await app.completeSimulatedPurchase();
     assert.equal(saved, undefined);
-    for (const action of ["connect", "review", "approve", "fill", "settle", "receipt"]) await app.advanceSimulation(action);
+    for (const action of ["connect", "route-ready", "review", "approve", "submit", "fill", "settle", "receipt"]) await app.advanceSimulation(action);
     const route = saved.lastSimulatedPurchase.route;
     assert.equal(route.mode, "simulation");
     assert.equal(route.output.outcome, outcome);
@@ -74,7 +74,7 @@ test("a storage failure leaves the local route visible and reports that it was n
     purchaseOutcome: "Yes", quoteFreshConfirmed: true, quoteConfirmedAt: Date.now()
   });
   await app.completeSimulatedPurchase();
-  for (const action of ["connect", "review", "approve", "fill", "settle", "receipt"]) await app.advanceSimulation(action);
+  for (const action of ["connect", "route-ready", "review", "approve", "submit", "fill", "settle", "receipt"]) await app.advanceSimulation(action);
   assert.equal(app.state.stage, "complete");
   assert.equal(app.state.busy, false);
   assert.match(app.element.innerHTML, /could not be saved/);
@@ -89,7 +89,7 @@ test("purchase refresh enables confirmation without a refresh prompt", async () 
   await app.refreshSelectedQuote({silent: true});
   assert.equal(app.state.quoteFreshConfirmed, true);
   assert.match(app.element.innerHTML, /50¢ × 1/);
-  assert.match(app.element.innerHTML, /id="complete-simulated-purchase"[^>]*type="button" >Review purchase/);
+  assert.match(app.element.innerHTML, /id="complete-simulated-purchase"[^>]*type="button" >Confirm Purchase/);
 });
 
 test("a changed stale quote requires review before recording a receipt", async () => {
@@ -100,7 +100,7 @@ test("a changed stale quote requires review before recording a receipt", async (
   assert.match(app.state.message, /price changed/);
   await app.completeSimulatedPurchase();
   assert.equal(app.state.receipt.unitPriceCents, 60);
-  for (const action of ["connect", "review", "approve", "fill", "settle", "receipt"]) await app.advanceSimulation(action);
+  for (const action of ["connect", "route-ready", "review", "approve", "submit", "fill", "settle", "receipt"]) await app.advanceSimulation(action);
   assert.equal(app.state.stage, "complete");
 });
 
@@ -157,11 +157,13 @@ for (const scenario of ['success', 'insufficient', 'expired', 'failed', 'reject'
     assert.equal(app.state.stage, 'simulation');
     app.state.simulation.scenario = scenario;
     await app.advanceSimulation('connect');
+    await app.advanceSimulation('route-ready');
     await app.advanceSimulation('review');
     if (scenario === 'insufficient' || scenario === 'expired') {
       assert.equal(app.state.simulation.step, scenario);
       assert.equal(app.state.simulation.reservedCents, 0);
       await app.advanceSimulation(scenario === 'insufficient' ? 'fund' : 'requote');
+      if (scenario === 'expired') await app.advanceSimulation('route-ready');
       await app.advanceSimulation('review');
     }
     if (scenario === 'reject') {
@@ -174,6 +176,7 @@ for (const scenario of ['success', 'insufficient', 'expired', 'failed', 'reject'
       assert.equal(app.state.simulation.reservedCents, 100);
       if (scenario === 'cancel') await app.advanceSimulation('cancel');
       else {
+        await app.advanceSimulation('submit');
         await app.advanceSimulation('fill');
         if (scenario !== 'failed') {
           await app.advanceSimulation('settle');
@@ -200,13 +203,15 @@ test('wallet approval progresses automatically through processing and settlement
     purchaseOutcome:'Yes', quantity:2, quoteFreshConfirmed:true, quoteConfirmedAt:Date.now()
   });
   await app.completeSimulatedPurchase();
-  for (const action of ['select-wallet','connect','review','approve']) {
+  for (const action of ['select-wallet','connect','route-ready','review','approve']) {
     await app.advanceSimulation(action);
     const text = app.element.innerHTML.replace(/<[^>]*>/g, ' ');
     assert.doesNotMatch(text, /\b(demo|simulation|simulated|prototype|mock|practice)\b/i);
     assert.match(text, /No funds move/);
   }
   app.runPurchaseTransitions();
+  assert.equal(app.state.simulation.step, 'submitting');
+  await app.scheduled.shift()();
   assert.equal(app.state.simulation.step, 'submitted');
   await app.scheduled.shift()();
   assert.equal(app.state.simulation.step, 'settlement');
@@ -225,11 +230,38 @@ test('scheduled execution cannot settle a cancelled or replaced session', async 
     purchaseOutcome:'Yes', quoteFreshConfirmed:true, quoteConfirmedAt:Date.now()
   });
   await app.completeSimulatedPurchase();
-  for (const action of ['connect','review','approve']) await app.advanceSimulation(action);
+  for (const action of ['connect','route-ready','review','approve']) await app.advanceSimulation(action);
   app.runPurchaseTransitions();
   await app.advanceSimulation('cancel');
   await app.scheduled.shift()();
   assert.equal(app.state.simulation.step, 'cancelled');
   assert.equal(app.state.simulation.position, 0);
   assert.equal(app.state.simulation.balanceCents, 100000);
+});
+
+
+test('a directional forecast still lets the user choose either outcome', () => {
+  const app = panel();
+  Object.assign(app.state, {stage:'purchase', event:{marketTicker:'A',yesAsk:'0.4',noAsk:'0.6'}, analysis:{verdict:'Yes'},purchaseOutcome:'No',quantity:3});
+  app.renderPurchase();
+  assert.match(app.element.innerHTML,/data-purchase-outcome="Yes"/);
+  assert.match(app.element.innerHTML,/data-purchase-outcome="No"[^>]*aria-pressed="true"/);
+  assert.match(app.element.innerHTML,/60¢ × 3 = \$1.80/);
+  assert.match(app.element.innerHTML,/Estimated position: 3 No units/);
+});
+
+test('wallet connection prepares the route before quote review and approval', async () => {
+  const app = panel();
+  Object.assign(app.state, {stage:'purchase',event:{marketTicker:'A',yesAsk:'0.5'},analysis:{verdict:'Yes'},purchaseOutcome:'Yes',quoteFreshConfirmed:true,quoteConfirmedAt:Date.now()});
+  await app.completeSimulatedPurchase();
+  await app.advanceSimulation('select-wallet');
+  assert.equal(app.state.simulation.step,'connection');
+  await app.advanceSimulation('connect');
+  assert.equal(app.state.simulation.step,'routing');
+  await app.advanceSimulation('approve');
+  assert.equal(app.state.simulation.reservedCents,0);
+  app.runPurchaseTransitions();
+  await app.scheduled.shift()();
+  assert.equal(app.state.simulation.step,'quote');
+  assert.match(app.element.innerHTML,/Review order/);
 });
