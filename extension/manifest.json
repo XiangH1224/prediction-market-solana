@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Prediction Market Side Panel",
+  "version": "0.1.0",
+  "description": "Stages simulated prediction-market trades from the local orchestrator for human approval.",
+  "permissions": ["sidePanel", "storage", "scripting"],
+  "host_permissions": ["http://localhost:8000/*"],
+  "action": { "default_title": "Open prediction side panel" },
+  "background": { "service_worker": "src/background.ts", "type": "module" },
+  "side_panel": { "default_path": "index.html" }
+}

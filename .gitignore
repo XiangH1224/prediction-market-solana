@@ -1,3 +1,16 @@
 node_modules/
 .DS_Store
 panel.bundle.js
+
+# backend (FastAPI orchestrator)
+backend/.venv/
+backend/.env
+backend/audit.jsonl
+backend/.pytest_cache/
+__pycache__/
+backend/.eval_cache/
+backend/paper_positions.json
+
+# extension (Vite side panel)
+extension/node_modules/
+extension/dist/
